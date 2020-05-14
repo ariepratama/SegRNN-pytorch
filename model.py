@@ -52,7 +52,7 @@ class Param(object):
         self.ludim = kwargs.get('ludim', LUDIM)
         self.lpdict_size = kwargs.get('lpdict_size', 0)
         self.lpdim = kwargs.get('lpdim', LPDIM)
-        self.hiddendim = kwargs.get('hiddendim', 0)
+        self.hiddendim = kwargs.get('hiddendim', HIDDENDIM)
         self.lstmindim = kwargs.get('lstmindim', LSTMINPDIM)
         self.lstmdim = kwargs.get('lstmdim', LSTMDIM)
         self.inpdim = kwargs.get('indim', INPDIM)
@@ -191,8 +191,8 @@ class FrameIdentificationRNN(nn.Module):
             1,
             target_embeddings.size()[1]
         )
-        x, h = self.tlstm(target_embeddings)[-1]
-        return h
+        x, h = self.tlstm(target_embeddings)
+        return x[-1]
 
     def _joint_embedding(self, target_vec: torch.Tensor, lu_id: int, posid: int) -> torch.Tensor:
         # TODO reproduce this
@@ -202,8 +202,7 @@ class FrameIdentificationRNN(nn.Module):
         #     lu_vec = lu_x[lexunit.id]
         target_vec = target_vec.squeeze()
         lu_vec = self.lu_x(torch.tensor(lu_id))
-        print(lu_vec.size())
-        print(target_vec.size())
+
         fbemb_i = torch.cat([target_vec, lu_vec, self.lp_x(torch.tensor(posid))])
 
         # TODO reproduce this dropout
@@ -211,17 +210,11 @@ class FrameIdentificationRNN(nn.Module):
         #     f_i = dropout(f_i, DROPOUT_RATE)
 
         # f_i = w_f * rectify(w_z * fbemb_i + b_z) + b_f
-        return self.w_f * F.relu(self.w_z * fbemb_i + self.b_z) + self.b_f
+        x = F.relu(self.w_z.mm(fbemb_i.unsqueeze(1)) + self.b_z)
+        return self.w_f.mm(x) + self.b_f
 
     def _get_valid_frames(self, lexical_unit):
         return list(self.lexical_unit_frame_map[lexical_unit.id])
 
     def _chosen_frame(self, valid_frames):
         return valid_frames[0]
-
-
-if __name__ == '__main__':
-    pass
-    # x = [1, 2, 3]
-    # mdl = SegRNN({})
-    # mdl(torch.tensor(x))

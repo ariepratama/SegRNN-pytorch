@@ -94,11 +94,13 @@ def test__joint_embedding():
     postags_size = 2
     ludict_size = 1
     lpdict_size = 1
+    framedict_size = 1
     p = Param(**{
         'vocdict_size': vocdict_size,
         'postdict_size': postags_size,
         'ludict_size': ludict_size,
-        'lpdict_size': lpdict_size
+        'lpdict_size': lpdict_size,
+        'framedict_size': framedict_size
     })
     targetpositions = [1, 0]
     mdl = FrameIdentificationRNN(Mock(), p)
@@ -114,4 +116,4 @@ def test__joint_embedding():
     target_vec = mdl._target_vec(target_embeddings)
     joint_embedding = mdl._joint_embedding(target_vec, 0, 0)
     print(joint_embedding)
-    assert False
+
