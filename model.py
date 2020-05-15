@@ -67,7 +67,7 @@ class FrameIdentificationRNN(nn.Module):
     """
 
     def __init__(self, pretrained_embedding_map, param: Param):
-        super(FrameIdentificationRNN, self).__init__()
+        super().__init__()
         self.pretrained_embedding_map = pretrained_embedding_map
         # TODO FIX THIS
         # PRETRAINED_DIM = len(list(self.pretrained_embedding_map.values()))
@@ -78,39 +78,44 @@ class FrameIdentificationRNN(nn.Module):
         self.lp_x = nn.Embedding(param.lpdict_size, param.lpdim)
 
         self.w_i = nn.Parameter(
-            torch.zeros(param.lstmindim, param.inpdim), requires_grad=True)
+            torch.rand(param.lstmindim, param.inpdim), requires_grad=True)
         self.b_i = nn.Parameter(
-            torch.zeros(param.lstmindim, 1), requires_grad=True)
+            torch.rand(param.lstmindim, 1), requires_grad=True)
 
         self.w_z = nn.Parameter(
-            torch.zeros(param.hiddendim, param.lstmdim + param.ludim + param.lpdim), requires_grad=True)
+            torch.rand(param.hiddendim, param.lstmdim + param.ludim + param.lpdim), requires_grad=True)
         self.b_z = nn.Parameter(
-            torch.zeros(param.hiddendim, 1), requires_grad=True)
+            torch.rand(param.hiddendim, 1), requires_grad=True)
 
         self.w_f = nn.Parameter(
-            torch.zeros(param.framedict_size, param.hiddendim), requires_grad=True)
+            torch.rand(param.framedict_size, param.hiddendim), requires_grad=True)
         self.b_f = nn.Parameter(
-            torch.zeros(param.framedict_size, 1), requires_grad=True)
+            torch.rand(param.framedict_size, 1), requires_grad=True)
 
         self.e_x = nn.Embedding(param.vocdict_size, param.pretrained_dim)
         # embedding for unknown pretrained embedding
-        self.u_x = nn.Parameter(torch.zeros(1, param.pretrained_dim), requires_grad=True)
+        self.u_x = nn.Parameter(torch.rand(1, param.pretrained_dim), requires_grad=True)
 
         self.w_e = nn.Parameter(
-            torch.zeros(param.lstmindim, param.pretrained_dim + param.inpdim), requires_grad=True)
+            torch.rand(param.lstmindim, param.pretrained_dim + param.inpdim), requires_grad=True)
         self.b_e = nn.Parameter(
-            torch.zeros(param.lstmindim, 1), requires_grad=True)
+            torch.rand(param.lstmindim, 1), requires_grad=True)
 
         self.fw_x = nn.LSTM(param.lstmindim, param.lstmdim, param.lstmdepth, bidirectional=True)
-        self.fw_x_hidden = torch.zeros(param.lstmdim, param.lstmdepth)
-
-        # self.bw_x = nn.LSTM(param.lstmindim, param.lstmdim, param.lstmdepth)
-        # self.bw_x_hidden = torch.zeros(param.lstmdim, param.lstmdepth)
+        self.fw_x_hidden = torch.rand(param.lstmdim, param.lstmdepth)
 
         self.tlstm = nn.LSTM(param.lstmindim * 2, param.lstmdim, param.lstmdepth)
-        self.tlstm_hidden = torch.zeros(param.lstmdim, param.lstmdepth)
+        self.tlstm_hidden = torch.rand(param.lstmdim, param.lstmdepth)
 
-    def forward(self, tokens, postags, lexical_unit, targetpositions: list) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor, postags: torch.Tensor, lexical_unit, targetpositions: list, device: str) -> torch.Tensor:
+        """
+
+        :param tokens: a sentence tokens sequence represented as Tensor of int
+        :param postags: a sentence POStag sequence represented as Tensor of int
+        :param lexical_unit: lexical_unit, that have `id` as lexical_unit id / int and posid: Part of speech of that lexical unit
+        :param targetpositions: list, in what index does the Frame should be identified
+        :return:
+        """
         tokens_vec = self._tokens_to_vec(tokens)
         postags_vec = self._postags_to_vec(postags)
         features_vec = self._tokens_and_postags_to_features(tokens_vec, postags_vec)
@@ -119,7 +124,8 @@ class FrameIdentificationRNN(nn.Module):
         return self._joint_embedding(
             target_vec,
             lexical_unit.id,
-            lexical_unit.posid
+            lexical_unit.posid,
+            device
         )
 
     def _tokens_to_vec(self, tokens: torch.Tensor) -> torch.Tensor:
@@ -194,16 +200,16 @@ class FrameIdentificationRNN(nn.Module):
         x, h = self.tlstm(target_embeddings)
         return x[-1]
 
-    def _joint_embedding(self, target_vec: torch.Tensor, lu_id: int, posid: int) -> torch.Tensor:
+    def _joint_embedding(self, target_vec: torch.Tensor, lu_id: int, posid: int, device: str) -> torch.Tensor:
         # TODO reproduce this
         # if USE_HIER and lexunit.id in relatedlus:
         #     lu_vec = esum([lu_x[luid] for luid in relatedlus[lexunit.id]])
         # else:
         #     lu_vec = lu_x[lexunit.id]
         target_vec = target_vec.squeeze()
-        lu_vec = self.lu_x(torch.tensor(lu_id))
+        lu_vec = self.lu_x(torch.tensor(lu_id).to(device))
 
-        fbemb_i = torch.cat([target_vec, lu_vec, self.lp_x(torch.tensor(posid))])
+        fbemb_i = torch.cat([target_vec, lu_vec, self.lp_x(torch.tensor(posid).to(device))])
 
         # TODO reproduce this dropout
         # if trainmode and USE_DROPOUT:
