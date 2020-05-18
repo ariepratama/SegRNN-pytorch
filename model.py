@@ -1,6 +1,8 @@
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
+from torchtext.vocab import Vectors
+from conll09 import FspDict
 
 configuration = {
     'unk_prob': 0.1,
@@ -14,7 +16,7 @@ configuration = {
     'lstm_depth': 2,
     'hidden_dim': 100,
     'use_dropout': False,
-    'pretrained_embedding_dim': 100,
+    'pretrained_embedding_dim': 300, # as torchtext by default uses 300
     'num_epochs': 3,
     'patience': 25,
     'eval_after_every_epochs': 100,
@@ -66,11 +68,11 @@ class FrameIdentificationRNN(nn.Module):
     Pytorch Implementation of https://github.com/clab/dynet/tree/master/examples/segmental-rnn
     """
 
-    def __init__(self, pretrained_embedding_map, param: Param):
+    def __init__(self, pretrained_embedding_map:Vectors, vocab_dict: FspDict, param: Param):
         super().__init__()
         self.pretrained_embedding_map = pretrained_embedding_map
-        # TODO FIX THIS
-        # PRETRAINED_DIM = len(list(self.pretrained_embedding_map.values()))
+        self.param = param
+        self.vocab_dict = vocab_dict
 
         self.v_x = nn.Embedding(param.vocdict_size, param.tokdim)
         self.p_x = nn.Embedding(param.postdict_size, param.posdim)
@@ -94,7 +96,7 @@ class FrameIdentificationRNN(nn.Module):
 
         self.e_x = nn.Embedding(param.vocdict_size, param.pretrained_dim)
         # embedding for unknown pretrained embedding
-        self.u_x = nn.Parameter(torch.rand(1, param.pretrained_dim), requires_grad=True)
+        self.u_x = nn.Parameter(torch.rand(1, param.pretrained_dim), requires_grad=False)
 
         self.w_e = nn.Parameter(
             torch.rand(param.lstmindim, param.pretrained_dim + param.inpdim), requires_grad=True)
@@ -116,9 +118,7 @@ class FrameIdentificationRNN(nn.Module):
         :param targetpositions: list, in what index does the Frame should be identified
         :return:
         """
-        tokens_vec = self._tokens_to_vec(tokens)
-        postags_vec = self._postags_to_vec(postags)
-        features_vec = self._tokens_and_postags_to_features(tokens_vec, postags_vec)
+        features_vec = self._tokens_and_postags_to_features(tokens, postags, device)
         target_embeddings = self._target_embeddings(features_vec, targetpositions)
         target_vec = self._target_vec(target_embeddings)
         return self._joint_embedding(
@@ -136,6 +136,19 @@ class FrameIdentificationRNN(nn.Module):
         """
         return self.v_x(tokens)
 
+    def _get_token_pretrained_embedding(self, tokens: torch.Tensor, device: str) -> torch.Tensor:
+        """
+
+        :param tokens:
+        :return:
+        """
+        placeholders = torch.zeros(tokens.size()[0], self.param.pretrained_dim).to(device)
+        for i, token in enumerate(tokens):
+            placeholders[i] = self.pretrained_embedding_map[
+                self.vocab_dict.getstr(token.cpu().item())
+            ].to(device)
+        return placeholders
+
     def _postags_to_vec(self, postags: torch.Tensor) -> torch.Tensor:
         """
         return embedding for postags
@@ -144,14 +157,20 @@ class FrameIdentificationRNN(nn.Module):
         """
         return self.p_x(postags)
 
-    def _tokens_and_postags_to_features(self, tokens_vec: torch.Tensor, postags_vec: torch.Tensor) -> torch.Tensor:
+    def _tokens_and_postags_to_features(self, tokens: torch.Tensor, postags: torch.Tensor, device: str) -> torch.Tensor:
         """
         return intermediary feature before going to lstm for forward and backward
         :param tokens_vec:
         :param postags_vec:
         :return:
         """
-        features = torch.cat([tokens_vec, postags_vec, self.u_x.repeat(tokens_vec.size()[0], 1)], dim=1)
+
+        features = torch.cat([
+            self._tokens_to_vec(tokens),
+            self._postags_to_vec(postags),
+            # self.u_x.repeat(tokens_vec.size()[0], 1)
+            self._get_token_pretrained_embedding(tokens, device)
+        ], dim=1)
         return F.relu(self.w_e.mm(features.T) + self.b_e)
 
     def _target_embeddings(self, feature_vec: torch.Tensor, targetpositions: list) -> torch.Tensor:

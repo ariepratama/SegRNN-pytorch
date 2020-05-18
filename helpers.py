@@ -1,12 +1,13 @@
 import sys
 import codecs
 from .sentence import Sentence
-
+import torch
 
 class CoNLL09Element(object):
     """
     Representation of a token ni CONLL?
     """
+
     def __init__(self):
         self.id = None
         self.form = None
@@ -16,7 +17,7 @@ class CoNLL09Element(object):
         self.sent_num = None
         self.dephead = None
         self.deprel = None
-        self.lu = None # int representation of
+        self.lu = None  # int representation of
         self.lupos = None
         self.frame = None
         self.is_arg = None

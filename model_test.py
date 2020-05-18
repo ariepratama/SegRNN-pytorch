@@ -1,6 +1,17 @@
 from model import FrameIdentificationRNN, Param, configuration
-from unittest.mock import Mock
+from unittest.mock import Mock, MagicMock
 import torch
+from torchtext.vocab import FastText
+TEXT_EMBEDDING = FastText('simple')
+
+
+def _mock_voc_dict(values_map: dict = {0: 'he', 1: 'she'}):
+    def _getstr(token_index: int):
+        return values_map.get(token_index, '<unk>')
+
+    vocdict_mock = Mock()
+    vocdict_mock.getstr = _getstr
+    return vocdict_mock
 
 
 def test__tokens_to_vec():
@@ -8,7 +19,7 @@ def test__tokens_to_vec():
     p = Param(**{
         'vocdict_size': vocdict_size
     })
-    mdl = FrameIdentificationRNN(Mock(), p)
+    mdl = FrameIdentificationRNN(TEXT_EMBEDDING, _mock_voc_dict(), p)
     token_embedding = mdl._tokens_to_vec(torch.tensor([0, 1]))
     assert token_embedding.size()[0] == 2
     assert token_embedding.size()[1] == configuration['token_dim']
@@ -19,7 +30,7 @@ def test__postags_to_vec():
     p = Param(**{
         'postdict_size': postags_size
     })
-    mdl = FrameIdentificationRNN(Mock(), p)
+    mdl = FrameIdentificationRNN(TEXT_EMBEDDING, _mock_voc_dict(), p)
     postag_embedding = mdl._postags_to_vec(torch.tensor([0, 1]))
     assert postag_embedding.size()[0] == 2
     assert postag_embedding.size()[1] == configuration['pos_dim']
@@ -32,12 +43,11 @@ def test__tokens_and_postags_to_features():
         'vocdict_size': vocdict_size,
         'postdict_size': postags_size
     })
-    mdl = FrameIdentificationRNN(Mock(), p)
-    token_embedding = mdl._tokens_to_vec(torch.tensor([0, 1]))
-    postag_embedding = mdl._postags_to_vec(torch.tensor([0, 1]))
+    vocdict_mock = _mock_voc_dict()
+    mdl = FrameIdentificationRNN(TEXT_EMBEDDING, vocdict_mock, p)
     features = mdl._tokens_and_postags_to_features(
-        token_embedding,
-        postag_embedding
+        torch.tensor([0, 1]),
+        torch.tensor([0, 1])
     )
 
     assert features.size()[0] == p.lstmindim
@@ -52,13 +62,11 @@ def test__target_embeddings():
         'postdict_size': postags_size
     })
     targetpositions = [1, 0]
-    mdl = FrameIdentificationRNN(Mock(), p)
-    token_embedding = mdl._tokens_to_vec(torch.tensor([0, 1]))
-    postag_embedding = mdl._postags_to_vec(torch.tensor([0, 1]))
+    mdl = FrameIdentificationRNN(TEXT_EMBEDDING, _mock_voc_dict(), p)
 
     features = mdl._tokens_and_postags_to_features(
-        token_embedding,
-        postag_embedding
+        torch.tensor([0, 1]),
+        torch.tensor([0, 1])
     )
 
     target_embeddings = mdl._target_embeddings(features, targetpositions)
@@ -75,13 +83,11 @@ def test__target_vec():
         'postdict_size': postags_size
     })
     targetpositions = [1, 0]
-    mdl = FrameIdentificationRNN(Mock(), p)
-    token_embedding = mdl._tokens_to_vec(torch.tensor([0, 1]))
-    postag_embedding = mdl._postags_to_vec(torch.tensor([0, 1]))
+    mdl = FrameIdentificationRNN(TEXT_EMBEDDING, _mock_voc_dict(), p)
 
     features = mdl._tokens_and_postags_to_features(
-        token_embedding,
-        postag_embedding
+        torch.tensor([0, 1]),
+        torch.tensor([0, 1])
     )
 
     target_embeddings = mdl._target_embeddings(features, targetpositions)
@@ -103,17 +109,15 @@ def test__joint_embedding():
         'framedict_size': framedict_size
     })
     targetpositions = [1, 0]
-    mdl = FrameIdentificationRNN(Mock(), p)
-    token_embedding = mdl._tokens_to_vec(torch.tensor([0, 1]))
-    postag_embedding = mdl._postags_to_vec(torch.tensor([0, 1]))
+    mdl = FrameIdentificationRNN(TEXT_EMBEDDING, _mock_voc_dict(), p)
 
     features = mdl._tokens_and_postags_to_features(
-        token_embedding,
-        postag_embedding
+        torch.tensor([0, 1]),
+        torch.tensor([0, 1])
     )
 
     target_embeddings = mdl._target_embeddings(features, targetpositions)
     target_vec = mdl._target_vec(target_embeddings)
-    joint_embedding = mdl._joint_embedding(target_vec, 0, 0)
+    joint_embedding = mdl._joint_embedding(target_vec, 0, 0, device='cpu')
     print(joint_embedding)
 

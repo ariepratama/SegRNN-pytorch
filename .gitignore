@@ -2,3 +2,7 @@
 data/*
 *__pycache__*
 notebooks*
+*data*
+*.vector_cache*
+*.ipynb_checkpoints*
+*.ipynb
