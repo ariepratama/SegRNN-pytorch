@@ -80,30 +80,10 @@ class FrameIdentificationRNN(nn.Module):
         self.lu_x = nn.Embedding(param.ludict_size, param.ludim)
         self.lp_x = nn.Embedding(param.lpdict_size, param.lpdim)
 
-        # self.w_i = nn.Parameter(
-        #     torch.rand(param.lstmindim, param.inpdim), requires_grad=True)
-        # self.b_i = nn.Parameter(
-        #     torch.rand(param.lstmindim, 1), requires_grad=True)
         self.lin_i = nn.Linear(param.lstmindim, param.inpdim)
-
-        # self.w_z = nn.Parameter(
-        #     torch.rand(param.hiddendim, param.lstmdim + param.ludim + param.lpdim), requires_grad=True)
-        # self.b_z = nn.Parameter(
-        #     torch.rand(param.hiddendim, 1), requires_grad=True)
-
-        # self.w_f = nn.Parameter(
-        #     torch.rand(param.framedict_size, param.hiddendim), requires_grad=True)
-        # self.b_f = nn.Parameter(
-        #     torch.rand(param.framedict_size, 1), requires_grad=True)
-
         self.e_x = nn.Embedding(param.vocdict_size, param.pretrained_dim)
         # embedding for unknown pretrained embedding
         self.u_x = nn.Parameter(torch.rand(1, param.pretrained_dim), requires_grad=False)
-
-        # self.w_e = nn.Parameter(
-        #     torch.rand(param.lstmindim, param.pretrained_dim + param.inpdim), requires_grad=True)
-        # self.b_e = nn.Parameter(
-        #     torch.rand(param.lstmindim, 1), requires_grad=True)
 
         self.lin_e = nn.Linear(param.pretrained_dim + param.inpdim, param.lstmindim)
 
@@ -225,7 +205,6 @@ class FrameIdentificationRNN(nn.Module):
         features = self.lin_e(features)
         features = F.relu(features)
         return features
-        # return F.relu(self.w_e.mm(features.T) + self.b_e)
 
     def _target_embeddings(self, feature_vec: torch.Tensor, targetpositions: list) -> torch.Tensor:
         """
@@ -245,25 +224,9 @@ class FrameIdentificationRNN(nn.Module):
         #     builders[0].set_dropout(DROPOUT_RATE)
         #     builders[1].set_dropout(DROPOUT_RATE)
 
-        # TODO this can be simplified using bidirectional = True
         forward_feature, _ = self.fw_x(feature_vec)
         # only take vector in frame position
         forward_feature = forward_feature[targetpositions]
-        # backward_feature, _ = self.bw_x(torch.flip(feature_vec, [2]))
-
-        # target_embeddings = torch.zeros(
-        #     len(targetpositions),
-        #     forward_feature.size()[1] * 2,
-        #     forward_feature.size()[2]
-        # )
-        # sentlen = forward_feature.size()[0]
-        #
-        # j = 0
-        # for targetidx in targetpositions:
-        #     target_embeddings[j] = torch.cat((
-        #         forward_feature[targetidx], backward_feature[sentlen - targetidx - 1]
-        #     ))
-        #     j += 1
         return forward_feature
 
     def _target_vec(self, target_embeddings: torch.Tensor) -> torch.Tensor:
@@ -291,9 +254,6 @@ class FrameIdentificationRNN(nn.Module):
         # if trainmode and USE_DROPOUT:
         #     f_i = dropout(f_i, DROPOUT_RATE)
 
-        # f_i = w_f * rectify(w_z * fbemb_i + b_z) + b_f
-        # x = F.relu(self.w_z.mm(fbemb_i.unsqueeze(1)) + self.b_z)
-        # x = self.lin_z(fbemb_i.unsqueeze(1))
         x = self.lin_z(fbemb_i)
         # x = F.relu(x)
         x = self.lin_f(x)
