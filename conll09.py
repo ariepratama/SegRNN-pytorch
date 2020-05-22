@@ -2,6 +2,8 @@ from copy import deepcopy
 from sentence import Sentence
 import sys
 import codecs
+import os
+import xml.etree.ElementTree as et
 
 # Label settings
 UNK = "UNK"
@@ -502,3 +504,106 @@ def read_conll(conll_file, syn_type=None):
     sys.stderr.write("# examples in %s : %d in %d sents\n" %(conll_file, len(examples), next_ex))
     sys.stderr.write("# examples with missing arguments : %d\n" %missingargs)
     return examples, missingargs, totalexamples
+
+
+VERSION = '1.7'
+DATA_DIR = ''
+FN_DATA_DIR = DATA_DIR + "fndata-" + VERSION + "/"
+FRAME_DIR = FN_DATA_DIR + "frame/"
+
+
+def read_related_lus(frame_dir: str):
+    sys.stderr.write("\nReading the frame-LU map from " + frame_dir + " ...\n")
+
+    lu_to_frame_dict = {}
+    tot_frames = 0.
+    max_frames = 0
+    tot_lus = 0.
+    longestlu = None
+
+    frame_to_lu_dict = {}
+    max_lus = 0
+    longestfrm = None
+
+    for f in os.listdir(frame_dir):
+        framef = os.path.join(frame_dir, f)
+        if framef.endswith("xsl"):
+            continue
+        tot_frames += 1
+        frm, fes, corefes, lus = read_fes_lus(framef)
+
+        for l in lus:
+            tot_lus += 1
+            if l not in lu_to_frame_dict:
+                lu_to_frame_dict[l] = set([])
+            lu_to_frame_dict[l].add(frm)
+            if len(lu_to_frame_dict[l]) > max_frames:
+                max_frames = len(lu_to_frame_dict[l])
+                longestlu = l
+
+
+            if frm not in frame_to_lu_dict:
+                frame_to_lu_dict[frm] = set([])
+            frame_to_lu_dict[frm].add(l)
+            if len(frame_to_lu_dict[frm]) > max_lus:
+                max_lus = len(frame_to_lu_dict[frm])
+                longestfrm = frm
+
+    related_lus = {}
+    for l in lu_to_frame_dict:
+        for frm in lu_to_frame_dict[l]:
+            if frm in frame_to_lu_dict:
+                if l not in related_lus:
+                    related_lus[l] = set([])
+                related_lus[l].update(frame_to_lu_dict[frm])
+
+    tot_frames_per_lu = sum([len(lu_to_frame_dict[l]) for l in lu_to_frame_dict])
+    avg_frames_per_lu = tot_frames_per_lu * 1.0 / len(lu_to_frame_dict)
+
+    sys.stderr.write("# Max frames for LU: %d in LU (%s)\n"
+                     "# Avg LUs for frame: %f\n"
+                     "# Avg frames per LU: %f\n"
+                     "# Max LUs for frame: %d in Frame (%s)\n"
+                     % (max_frames,
+                        LUDICT.getstr(longestlu),
+                        tot_lus/tot_frames,
+                        avg_frames_per_lu,
+                        max_lus,
+                        FRAMEDICT.getstr(longestfrm)))
+
+    return lu_to_frame_dict, related_lus
+
+
+def read_fes_lus(frame_file):
+    f = open(frame_file, "rb")
+    tree = et.parse(f)
+    root = tree.getroot()
+
+    frcount = 0
+    framename = ''
+    frid = None
+    for frame in root.iter('{http://framenet.icsi.berkeley.edu}frame'):
+        framename = frame.attrib["name"]
+        frid = FRAMEDICT.addstr(framename)
+        frcount += 1
+
+    if frcount > 1:
+        raise Exception("More than one frame?", frame_file, framename)
+
+    fes = []
+    corefes = []
+    for fe in root.iter('{http://framenet.icsi.berkeley.edu}FE'):
+        fename = fe.attrib["name"]
+        feid = FEDICT.addstr(fename)
+        fes.append(feid)
+        if fe.attrib["coreType"] == "Core": corefes.append(feid)
+
+    lus = []
+    for lu in root.iter('{http://framenet.icsi.berkeley.edu}lexUnit'):
+        lu_fields = lu.attrib["name"].split(".")
+        luid = LUDICT.addstr(lu_fields[0])
+        LUPOSDICT.addstr(lu_fields[1])
+        lus.append(luid)
+    f.close()
+
+    return frid, fes, corefes, lus
