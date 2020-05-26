@@ -260,3 +260,49 @@ class FrameIdentificationRNN(nn.Module):
         # x = F.relu(x)
         return x
         # return self.w_f.mm(x) + self.b_f
+
+
+class ArgumentIdentificationBaseEmbeddingParam(object):
+    def __init__(self, **kwargs):
+        self.input_dim = kwargs.get('input_dim', 0)
+        self.vocab_embedding_dim = kwargs.get('vocab_embedding_dim', 0)
+        self.postag_input_dim = kwargs.get('postag_input_dim', 0)
+        self.postag_dim = kwargs.get('postag_dim', 0)
+        self.bilstm_input_dim = kwargs.get('bilstm_input_dim', 0)
+        self.bilstm_hidden_dim = kwargs.get('bilstm_hidden_dim', 0)
+        self.bilstm_n_layers = kwargs.get('bilstm_n_layers', 0)
+
+
+class ArgumentIdentificationBaseEmbedding(nn.Module):
+    def __init__(self, model_param: ArgumentIdentificationBaseEmbeddingParam):
+        super().__init__()
+        self.vocab_embedding = nn.Embedding(model_param.input_dim, model_param.vocab_embedding_dim)
+        self.postag_embedding = nn.Embedding(model_param.postag_input_dim, model_param.postag_dim)
+        self.lin1 = nn.Linear(
+            model_param.input_dim + model_param.postag_input_dim + model_param.input_dim,
+            model_param.bilstm_input_dim
+        )
+        self.bilstm = nn.LSTM(
+            model_param.bilstm_input_dim,
+            model_param.bilstm_hidden_dim,
+            model_param.bilstm_n_layers
+        )
+        self.lin2 = nn.Linear(
+            model_param.bilstm_hidden_dim,
+            model_param.bilstm_input_dim
+        )
+
+    def forward(self, tokens: torch.Tensor, postags: torch.Tensor, distances_from_target_frame: torch.Tensor):
+        vocab_embedded = self.vocab_embedding(tokens)
+        postag_embedded = self.postag_embedding(postags)
+        x = torch.cat([
+            vocab_embedded,
+            postag_embedded,
+            distances_from_target_frame
+        ])
+        x = F.relu(x)
+        x = self.bilstm(x)
+        x = F.relu(x)
+
+        return x
+
