@@ -299,10 +299,10 @@ class ArgumentIdentificationBaseEmbedding(nn.Module):
             vocab_embedded,
             postag_embedded,
             distances_from_target_frame
-        ])
+        ], dim=1)
         x = F.relu(x)
-        x = self.bilstm(x)
-        x = F.relu(x)
+        x, _ = self.bilstm(x.view(x.shape[0], 1, x.shape[1]))
+        x = F.relu(x.squeeze(1))
 
         return x
 
