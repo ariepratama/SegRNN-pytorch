@@ -123,7 +123,7 @@ class FrameIdentificationRNN(nn.Module):
         )
 
     def forward_as_df(self, tokens: torch.Tensor, postags: torch.Tensor, lexical_units: torch.Tensor,
-                lexical_unit_postags: torch.Tensor, targetpositions: list):
+                      lexical_unit_postags: torch.Tensor, targetpositions: list):
         import pandas as pd
         import numpy as np
         """
@@ -306,3 +306,60 @@ class ArgumentIdentificationBaseEmbedding(nn.Module):
 
         return x
 
+
+class ArgumentIdentificationFrameEmbeddingParam(object):
+    def __init__(self, **kwargs):
+        self.lu_size = kwargs.get('lu_size', 0)
+        self.lu_embedding_size = kwargs.get('lu_embedding_size', 0)
+        self.lu_postag_size = kwargs.get('lu_postag_size', 0)
+        self.lu_postag_embedding_size = kwargs.get('lu_postag_embedding_size', 0)
+        self.joint_embedding_size = kwargs.get('joint_embedding_size', 0)
+        self.lstm_hidden_dim = kwargs.get('lstm_hidden_dim', 0)
+        self.lstm_n_layers = kwargs.get('lstm_n_layers', 0)
+        self.frame_size = kwargs.get('frame_size', 0)
+        self.frame_embedding_size = kwargs.get('frame_embedding_size', 0)
+        self.ctx_size = kwargs.get('ctx_size', 0)
+
+
+class ArgumentIdentificationFrameEmbedding(nn.Module):
+    def __init__(self, model_param: ArgumentIdentificationFrameEmbeddingParam):
+        super().__init__()
+
+        self.lu_embedding = nn.Embedding(
+            model_param.lu_size,
+            model_param.lu_embedding_size
+        )
+        self.lu_postag_embedding = nn.Embedding(
+            model_param.lu_postag_size,
+            model_param.lu_postag_embedding_size
+        )
+        self.frame_embedding = nn.Embedding(
+            model_param.frame_size,
+            model_param.frame_embedding_size
+        )
+        self.lstm = nn.LSTM(
+            model_param.joint_embedding_size,
+            model_param.lstm_hidden_dim,
+            model_param.lstm_n_layers
+        )
+        self.ctx_lstm = nn.LSTM(
+            model_param.ctx_size,
+            model_param.lstm_hidden_dim,
+            model_param.lstm_n_layers
+        )
+
+    def forward(self, joint_embedding: torch.Tensor, ctx:torch.Tensor,
+                lu: torch.Tensor, lu_postag: torch.Tensor, frame: torch.Tensor):
+        x_joint = self.lstm(joint_embedding.view(joint_embedding.shape[0], 1, joint_embedding.shape[1]))
+        x_ctx = self.ctx_lstm(ctx)
+        x_lu = self.lu_embedding(lu)
+        x_lu_postag = self.lu_postag_embedding(lu_postag)
+        x_frame = self.frame_embedding(frame)
+
+        return torch.cat([
+            x_lu,
+            x_lu_postag,
+            x_frame,
+            x_joint,
+            x_ctx
+        ], dim=1)
