@@ -265,26 +265,31 @@ class FrameIdentificationRNN(nn.Module):
 class FrameTargetIdentificationRNNParam(object):
     def __init__(self, **kwargs):
         self.input_size = kwargs.get('input_size', 0)
-        self.token_embedding = kwargs.get('token_embedding', 0)
+        self.token_dim = kwargs.get('token_dim', 100)
+        self.pretrained_dim = kwargs.get('pretrained_dim', 300)
         self.postag_size = kwargs.get('postag_size', 0)
-        self.postag_embedding = kwargs.get('postag_embedding', 0)
+        self.postag_dim = kwargs.get('postag_dim', 100)
         self.lemma_size = kwargs.get('lemma_size', 0)
-        self.lemma_embedding = kwargs.get('lemma_embedding', 0)
+        self.lemma_dim = kwargs.get('lemma_dim', 100)
         self.bilstm_input_size = kwargs.get('bilstm_input_size', 100)
         self.bilstm_hidden_size = kwargs.get('bilstm_hidden_size', 100)
+        self.bilstm_layer_size = kwargs.get('bilstm_layer_size', 2)
         self.output_size = kwargs.get('output_size', 0)
 
 
 class FrameTargetIdentificationRNN(nn.Module):
     def __init__(self, pretrained_embedding: Vectors, model_param: FrameTargetIdentificationRNNParam):
         super().__init__()
-        self.token_embedding = nn.Embedding(model_param.input_size, model_param.token_embedding)
-        self.postag_embedding = nn.Embedding(model_param.postag_size, model_param.postag_embedding)
-        self.lemma_embedding = nn.Embedding(model_param.lemma_size, model_param.lemma_embedding)
+        self.token_embedding = nn.Embedding(model_param.input_size, model_param.token_dim)
+        self.postag_embedding = nn.Embedding(model_param.postag_size, model_param.postag_dim)
+        self.lemma_embedding = nn.Embedding(model_param.lemma_size, model_param.lemma_dim)
         self.pretrained_embedding = pretrained_embedding
 
         self.lin1 = nn.Linear(
-            model_param.token_embedding + model_param.postag_embedding + model_param.lemma_embedding,
+            (model_param.token_dim +
+             model_param.postag_dim +
+             model_param.lemma_dim +
+             model_param.pretrained_dim),
             model_param.bilstm_input_size
         )
         self.bilstm = nn.LSTM(
@@ -296,11 +301,14 @@ class FrameTargetIdentificationRNN(nn.Module):
             model_param.output_size
         )
 
-    def forward(self, tokens:torch.Tensor, postags: torch.Tensor, lemmas: torch.Tensor):
+    def forward(self, tokens: torch.Tensor, postags: torch.Tensor, lemmas: torch.Tensor):
         tokens_x = self.token_embedding(tokens)
         postags_x = self.postag_embedding(postags)
         lemmas_x = self.lemma_embedding(lemmas)
-        x = torch.cat([tokens_x, postags_x, lemmas_x])
+        pretrained_x = torch.zeros(tokens.shape[0], self.pretrained_embedding.dim)
+        for i, token in enumerate(tokens):
+            pretrained_x[i] = self.pretrained_embedding[token]
+        x = torch.cat([tokens_x, postags_x, lemmas_x, pretrained_x], dim=1)
         x = self.lin1(x)
         x = F.relu(x)
         x, _ = self.bilstm(x.view(x.shape[0], 1, x.shape[1]))
@@ -308,7 +316,6 @@ class FrameTargetIdentificationRNN(nn.Module):
         x = self.lin2(x)
 
         return x
-
 
 
 class ArgumentIdentificationBaseEmbeddingParam(object):
@@ -397,7 +404,7 @@ class ArgumentIdentificationFrameEmbedding(nn.Module):
             model_param.lstm_n_layers
         )
 
-    def forward(self, joint_embedding: torch.Tensor, ctx:torch.Tensor,
+    def forward(self, joint_embedding: torch.Tensor, ctx: torch.Tensor,
                 lu: torch.Tensor, lu_postag: torch.Tensor, frame: torch.Tensor):
         x_joint = self.lstm(joint_embedding.view(joint_embedding.shape[0], 1, joint_embedding.shape[1]))
         x_ctx = self.ctx_lstm(ctx)
