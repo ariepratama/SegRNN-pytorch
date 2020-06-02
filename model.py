@@ -1,8 +1,14 @@
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
+from torch.optim import Adam
 from torchtext.vocab import Vectors
-from conll09 import FspDict
+from conll09 import *
+from pytorch_lightning.core.lightning import LightningModule
+from torchtext.data import Field
+from torchtext.data import Dataset, Example
+from torchtext.data import BucketIterator
+from torchtext.vocab import FastText
 
 configuration = {
     'unk_prob': 0.1,
@@ -44,6 +50,17 @@ DEV_EVAL_EPOCH = configuration['dev_eval_epoch_frequency'] * EVAL_EVERY_EPOCH
 PRETRAINED_EMB_DIM = configuration['pretrained_embedding_dim']
 
 
+class CustomDataset(Dataset):
+    def __init__(self, sentences: list, s_postags: list, s_lemmas: list, labels: list, fields: list):
+        super(CustomDataset, self).__init__(
+            [
+                Example.fromlist([tokens, postags, lemmas, label], fields)
+                for tokens, postags, lemmas, label in zip(sentences, s_postags, s_lemmas, labels)
+            ],
+            fields
+        )
+
+
 class Param(object):
     def __init__(self, **kwargs):
         self.vocdict_size = kwargs.get('vocdict_size', 0)
@@ -63,7 +80,7 @@ class Param(object):
         self.lstmdepth = kwargs.get('lstmdepth', LSTMDEPTH)
 
 
-class FrameIdentificationRNN(nn.Module):
+class FrameIdentificationRNN(LightningModule):
     """
     Pytorch Implementation of https://github.com/clab/dynet/tree/master/examples/segmental-rnn
     """
@@ -275,9 +292,10 @@ class FrameTargetIdentificationRNNParam(object):
         self.bilstm_hidden_size = kwargs.get('bilstm_hidden_size', 100)
         self.bilstm_layer_size = kwargs.get('bilstm_layer_size', 2)
         self.output_size = kwargs.get('output_size', 0)
+        self.batch_size = kwargs.get('batch_size', 1)
 
 
-class FrameTargetIdentificationRNN(nn.Module):
+class FrameTargetIdentificationRNN(LightningModule):
     def __init__(self, pretrained_embedding: Vectors, model_param: FrameTargetIdentificationRNNParam):
         super().__init__()
         self.token_embedding = nn.Embedding(model_param.input_size, model_param.token_dim)
@@ -300,22 +318,131 @@ class FrameTargetIdentificationRNN(nn.Module):
             model_param.bilstm_hidden_size,
             model_param.output_size
         )
+        self.batch_size = model_param.batch_size
+        self.train_iter = None
+        self.val_iter = None
+        # self._d = 'cpu'
+        self._d = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     def forward(self, tokens: torch.Tensor, postags: torch.Tensor, lemmas: torch.Tensor):
         tokens_x = self.token_embedding(tokens)
         postags_x = self.postag_embedding(postags)
         lemmas_x = self.lemma_embedding(lemmas)
-        pretrained_x = torch.zeros(tokens.shape[0], self.pretrained_embedding.dim)
-        for i, token in enumerate(tokens):
-            pretrained_x[i] = self.pretrained_embedding[token]
-        x = torch.cat([tokens_x, postags_x, lemmas_x, pretrained_x], dim=1)
+        pretrained_x = torch.zeros(tokens.shape[0], tokens.shape[1], self.pretrained_embedding.dim).to(self._d)
+        for i, batch in enumerate(tokens):
+            for j, token in enumerate(batch):
+                pretrained_x[i][j] = self.pretrained_embedding[token]
+        # pretrained_x = self.pretrained_embedding[tokens].to(self._d)
+        # print(tokens_x.shape)
+        # print(postags_x.shape)
+        # print(lemmas_x.shape)
+        # print(pretrained_x.shape)
+
+        x = torch.cat([tokens_x, postags_x, lemmas_x, pretrained_x], dim=2)
         x = self.lin1(x)
         x = F.relu(x)
-        x, _ = self.bilstm(x.view(x.shape[0], 1, x.shape[1]))
-        x = F.relu(x)
+        x, _ = self.bilstm(x.permute(1, 0, 2))
+        # x, _ = self.bilstm(x.view(x.shape[0], self.batch_size, x.shape[1]))
+        x = F.relu(x.permute(1, 0, 2))
         x = self.lin2(x)
 
         return x
+
+    def configure_optimizers(self):
+        return Adam(self.parameters(), lr=0.001)
+
+    def prepare_data(self):
+        dev_conll_file_loc = 'data/fn1.7/fn1.7.dev.syntaxnet.conll'
+        e, m, x = read_conll(dev_conll_file_loc)
+
+        max_token_length = 0
+        for i in range(len(e)):
+            current_sentence_len = len(e[i].sentence.tokens)
+            if current_sentence_len > max_token_length:
+                max_token_length = current_sentence_len
+
+        # reverse int to tokens
+        sentences = list()
+        sentences_postags = list()
+        sentences_lemmas = list()
+        labels = list()
+
+        for i in range(int(x)):
+            sentences.append([VOCDICT.getstr(token) for token in e[i].sentence.tokens])
+            sentences_postags.append([POSDICT.getstr(postag) for postag in e[i].sentence.postags])
+            sentences_lemmas.append([LEMDICT.getstr(lemma) for lemma in e[i].sentence.lemmas])
+            labels.append(list(e[i].targetframedict.keys()))
+
+        tokens_field = Field(sequential=True, fix_length=max_token_length)
+        postags_field = Field(sequential=True, fix_length=max_token_length)
+        lemmas_field = Field(sequential=True, fix_length=max_token_length)
+
+        tokens_field.build_vocab(sentences, vectors=FastText('simple'))
+        postags_field.build_vocab(sentences_postags)
+        lemmas_field.build_vocab(sentences_lemmas, vectors=FastText('simple'))
+
+        def _preprocess_field(l: list) -> list:
+            return [
+                1 if j in l else 0
+                for j in range(max_token_length)
+            ]
+
+        labels_field = Field(
+            sequential=False,
+            use_vocab=False,
+            preprocessing=_preprocess_field,
+            is_target=True
+        )
+
+        train, val = CustomDataset(
+            sentences,
+            sentences_postags,
+            sentences_lemmas,
+            labels,
+            fields=[
+                ('tokens', tokens_field),
+                ('postags', postags_field),
+                ('lemmas', lemmas_field),
+                ('labels', labels_field),
+            ]
+        ).split()
+
+        self.train_iter, self.val_iter = BucketIterator.splits(
+            datasets=(train, val),
+            batch_sizes=(self.batch_size, self.batch_size),
+            device=self._d,
+            sort=False
+        )
+
+    def train_dataloader(self):
+        return self.train_iter
+
+    def training_step(self, batch, batch_idx):
+        x, y = (batch.tokens.T, batch.postags.T, batch.lemmas.T), batch.labels
+        y_hat = self(*x)
+        loss = F.cross_entropy(y_hat.permute(0, 2, 1), y)
+
+        return dict(
+            loss=loss,
+            log=dict(
+                train_loss=loss
+            )
+        )
+
+    def val_dataloader(self):
+        return self.val_iter
+
+    def validation_step(self, batch, batch_idx):
+        x, y = (batch.tokens.T, batch.postags.T, batch.lemmas.T), batch.labels
+        y_hat = self(*x)
+        loss = F.cross_entropy(y_hat.permute(0, 2, 1), y)
+
+        return dict(
+            loss=loss,
+            log=dict(
+                val_loss=loss
+            )
+        )
 
 
 class ArgumentIdentificationBaseEmbeddingParam(object):
@@ -329,7 +456,7 @@ class ArgumentIdentificationBaseEmbeddingParam(object):
         self.bilstm_n_layers = kwargs.get('bilstm_n_layers', 0)
 
 
-class ArgumentIdentificationBaseEmbedding(nn.Module):
+class ArgumentIdentificationBaseEmbedding(LightningModule):
     def __init__(self, model_param: ArgumentIdentificationBaseEmbeddingParam):
         super().__init__()
         self.vocab_embedding = nn.Embedding(model_param.input_dim, model_param.vocab_embedding_dim)
@@ -375,9 +502,10 @@ class ArgumentIdentificationFrameEmbeddingParam(object):
         self.frame_size = kwargs.get('frame_size', 0)
         self.frame_embedding_size = kwargs.get('frame_embedding_size', 0)
         self.ctx_size = kwargs.get('ctx_size', 0)
+        self.batch_size = kwargs.get('batch_size', 32)
 
 
-class ArgumentIdentificationFrameEmbedding(nn.Module):
+class ArgumentIdentificationFrameEmbedding(LightningModule):
     def __init__(self, model_param: ArgumentIdentificationFrameEmbeddingParam):
         super().__init__()
 
@@ -404,18 +532,44 @@ class ArgumentIdentificationFrameEmbedding(nn.Module):
             model_param.lstm_n_layers
         )
 
-    def forward(self, joint_embedding: torch.Tensor, ctx: torch.Tensor,
+    def forward(self, base_embedding: torch.Tensor, ctx: torch.Tensor,
                 lu: torch.Tensor, lu_postag: torch.Tensor, frame: torch.Tensor):
-        x_joint = self.lstm(joint_embedding.view(joint_embedding.shape[0], 1, joint_embedding.shape[1]))
+        """
+
+        :param base_embedding: from ArgumentIdentificationBaseEmbedding
+        :param ctx:
+        :param lu:
+        :param lu_postag:
+        :param frame:
+        :return:
+        """
+        x_joint = self.lstm(base_embedding.view(base_embedding.shape[0], 1, base_embedding.shape[1]))
         x_ctx = self.ctx_lstm(ctx)
         x_lu = self.lu_embedding(lu)
         x_lu_postag = self.lu_postag_embedding(lu_postag)
         x_frame = self.frame_embedding(frame)
-
-        return torch.cat([
+        x = torch.cat([
             x_lu,
             x_lu_postag,
             x_frame,
             x_joint,
             x_ctx
         ], dim=1)
+
+        return x
+
+
+class ArgumentIdentificationSpanEmbeddingParam(object):
+    def __init__(self, **kwargs):
+        self.input_size = kwargs.get('input_size')
+        self.hidden_size = kwargs.get('hidden_size', 100)
+        self.depth_size = kwargs.get('depth_size', 2)
+
+
+class ArgumentIdentificationSpanEmbedding(LightningModule):
+    def __init__(self, param: ArgumentIdentificationSpanEmbeddingParam):
+        super().__init__()
+        self.bilstm = nn.LSTM(param.input_size, param.hidden_size, param.depth_size)
+
+    def forward(self):
+        pass

@@ -30,6 +30,7 @@ def lin1(model: FrameTargetIdentificationRNN, tokens, postags, lemmas):
     x = torch.cat([tokens_x, postags_x, lemmas_x, pretrained_x], dim=1)
     return model.lin1(x)
 
+
 def test_lin1():
     model = FrameTargetIdentificationRNN(TEXT_EMBEDDING, model_param)
     x = lin1(model, tokens, postags, lemmas)
@@ -44,8 +45,12 @@ def test_bilstm():
 
     x, _ = model.bilstm(x.view(x.shape[0], 1, x.shape[1]))
 
-    print(x.shape)
     assert len(x.shape) == 3
     assert x.shape[0] == model_param.bilstm_layer_size
     assert x.shape[1] == model_param.bilstm_hidden_size
 
+
+def test_with_sentence_input():
+    model = FrameTargetIdentificationRNN(TEXT_EMBEDDING, model_param)
+
+    model.forward()
