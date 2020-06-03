@@ -90,7 +90,7 @@ class FrameIdentificationRNN(LightningModule):
         self.pretrained_embedding_map = pretrained_embedding_map
         self.param = param
         self.vocab_dict = vocab_dict
-        self.device = device
+        self._d = device
 
         self.v_x = nn.Embedding(param.vocdict_size, param.tokdim)
         self.p_x = nn.Embedding(param.postdict_size, param.posdim)
@@ -106,14 +106,14 @@ class FrameIdentificationRNN(LightningModule):
 
         self.fw_x = nn.LSTM(param.lstmindim, param.lstmdim, param.lstmdepth, bidirectional=True)
         self.fw_x_hidden = (
-            torch.rand(param.lstmdepth * 2, 1, param.lstmdim).to(self.device),
-            torch.rand(param.lstmdepth * 2, 1, param.lstmdim).to(self.device)
+            torch.rand(param.lstmdepth * 2, 1, param.lstmdim).to(self._d),
+            torch.rand(param.lstmdepth * 2, 1, param.lstmdim).to(self._d)
         )
 
         self.tlstm = nn.LSTM(param.lstmindim * 2, param.lstmdim, param.lstmdepth)
         self.tlstm_hidden = (
-            torch.rand(param.lstmdepth, 1, param.lstmdim).to(self.device),
-            torch.rand(param.lstmdepth, 1, param.lstmdim).to(self.device)
+            torch.rand(param.lstmdepth, 1, param.lstmdim).to(self._d),
+            torch.rand(param.lstmdepth, 1, param.lstmdim).to(self._d)
         )
 
         self.lin_z = nn.Linear(param.lstmdim + param.ludim + param.lpdim, param.hiddendim)
@@ -130,14 +130,57 @@ class FrameIdentificationRNN(LightningModule):
         :param targetpositions: list, in what index does the Frame should be identified
         :return:
         """
-        features_vec = self._tokens_and_postags_to_features(tokens, postags)
-        target_embeddings = self._target_embeddings(features_vec, targetpositions)
-        target_vec = self._target_vec(target_embeddings)
-        return self._joint_embedding(
-            target_vec,
-            lexical_units,
-            lexical_unit_postags
+        tokens_x = self.v_x(tokens)
+        postags_x = self.p_x(postags)
+
+        x = torch.cat([
+            tokens_x,
+            postags_x,
+            self._get_token_pretrained_embedding(tokens)
+        ], dim=1)
+        x = self.lin_e(x)
+        x = F.relu(x)
+        x = x.view(
+            x.size()[0],
+            1,  # batch num, assuming this to be 1
+            x.size()[1]
         )
+        # TODO reproduce dropout
+        # if USE_DROPOUT and trainmode:
+        #     builders[0].set_dropout(DROPOUT_RATE)
+        #     builders[1].set_dropout(DROPOUT_RATE)
+
+        x, _ = self.fw_x(x)
+        # only take vector in frame position
+        x = x[targetpositions]
+        x, _ = self.tlstm(x)
+        # target_embeddings = self._target_embeddings(x, targetpositions)
+        # target_vec = self._target_vec(target_embeddings)
+
+        # if USE_HIER and lexunit.id in relatedlus:
+        #     lu_vec = esum([lu_x[luid] for luid in relatedlus[lexunit.id]])
+        # else:
+        #     lu_vec = lu_x[lexunit.id]
+        # if len(target_vec.size()) == 1:
+        #     target_vec = target_vec.view(1, -1)
+        x = x.squeeze(1)
+        lexical_unit_embedding = self.lu_x(lexical_units)
+        lexical_unit_postag_embedding = self.lp_x(lexical_unit_postags)
+        x = torch.cat([
+            x,
+            lexical_unit_embedding,
+            lexical_unit_postag_embedding
+        ], dim=1)
+
+        # TODO reproduce this dropout
+        # if trainmode and USE_DROPOUT:
+        #     f_i = dropout(f_i, DROPOUT_RATE)
+        print(x.shape)
+        x = self.lin_z(x)
+        # x = F.relu(x)
+        x = self.lin_f(x)
+        # x = F.relu(x)
+        return x
 
     def forward_as_df(self, tokens: torch.Tensor, postags: torch.Tensor, lexical_units: torch.Tensor,
                       lexical_unit_postags: torch.Tensor, targetpositions: list):
@@ -191,11 +234,11 @@ class FrameIdentificationRNN(LightningModule):
         :param tokens:
         :return:
         """
-        placeholders = torch.zeros(tokens.size()[0], self.param.pretrained_dim).to(self.device)
+        placeholders = torch.zeros(tokens.size()[0], self.param.pretrained_dim).to(self._d)
         for i, token in enumerate(tokens):
             placeholders[i] = self.pretrained_embedding_map[
                 self.vocab_dict.getstr(token.cpu().item())
-            ].to(self.device)
+            ].to(self._d)
         return placeholders
 
     def _postags_to_vec(self, postags: torch.Tensor) -> torch.Tensor:
@@ -230,7 +273,6 @@ class FrameIdentificationRNN(LightningModule):
         :param targetpositions:
         :return:
         """
-        feature_vec = feature_vec
         feature_vec = feature_vec.view(
             feature_vec.size()[0],
             1,  # batch num, assuming this to be 1

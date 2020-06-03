@@ -7,7 +7,6 @@ TEXT_EMBEDDING = FastText('simple')
 
 device = 'cpu'
 
-
 vocdict_size = 3
 postags_size = 3
 ludict_size = 3
@@ -20,6 +19,7 @@ p = Param(**{
     'lpdict_size': lpdict_size,
     'framedict_size': framedict_size
 })
+
 
 def _mock_voc_dict(values_map: dict = {0: 'he', 1: 'she'}):
     def _getstr(token_index: int):
@@ -133,5 +133,3 @@ def test_forward():
     print(res)
     print(res.size())
     assert res.size()[1] == 3
-
-
