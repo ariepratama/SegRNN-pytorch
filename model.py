@@ -175,7 +175,6 @@ class FrameIdentificationRNN(LightningModule):
         # TODO reproduce this dropout
         # if trainmode and USE_DROPOUT:
         #     f_i = dropout(f_i, DROPOUT_RATE)
-        print(x.shape)
         x = self.lin_z(x)
         # x = F.relu(x)
         x = self.lin_f(x)
