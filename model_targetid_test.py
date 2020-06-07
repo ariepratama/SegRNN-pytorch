@@ -1,4 +1,4 @@
-from model import FrameTargetIdentificationRNN, FrameTargetIdentificationRNNParam, configuration
+from model import FrameTargetIdentificationRNN, FrameTargetIdentificationParam, configuration
 from unittest.mock import Mock, MagicMock
 import torch
 from torchtext.vocab import FastText
@@ -7,7 +7,7 @@ TEXT_EMBEDDING = FastText('simple')
 
 device = 'cpu'
 
-model_param = FrameTargetIdentificationRNNParam(**dict(
+model_param = FrameTargetIdentificationParam(**dict(
     input_size=2,
     postag_size=3,
     lemma_size=4,

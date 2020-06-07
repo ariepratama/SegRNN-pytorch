@@ -1,4 +1,4 @@
-from model import FrameIdentificationRNN, Param, configuration
+from model import FrameIdentificationRNN, FrameIdentificationParam, configuration
 from unittest.mock import Mock, MagicMock
 import torch
 from torchtext.vocab import FastText
@@ -12,7 +12,7 @@ postags_size = 3
 ludict_size = 3
 lpdict_size = 3
 framedict_size = 3
-p = Param(**{
+p = FrameIdentificationParam(**{
     'vocdict_size': vocdict_size,
     'postdict_size': postags_size,
     'ludict_size': ludict_size,

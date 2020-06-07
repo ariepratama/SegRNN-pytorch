@@ -84,7 +84,7 @@ class FrameDataset(Dataset):
         )
 
 
-class Param(object):
+class FrameIdentificationParam(object):
     def __init__(self, **kwargs):
         self.vocdict_size = kwargs.get('vocdict_size', 0)
         self.tokdim = kwargs.get('tokdim', TOKDIM)
@@ -102,6 +102,7 @@ class Param(object):
         self.pretrained_dim = kwargs.get('pretrained_dim', PRETRAINED_EMB_DIM)
         self.lstmdepth = kwargs.get('lstmdepth', LSTMDEPTH)
         self.batch_size = kwargs.get('batch_size', 32)
+        self.train_data_path = kwargs.get('train_data_path', 'data/fn1.7/fn1.7.dev.syntaxnet.conll')
 
 
 class FrameIdentificationRNN(LightningModule):
@@ -109,11 +110,11 @@ class FrameIdentificationRNN(LightningModule):
     Pytorch Implementation of https://github.com/clab/dynet/tree/master/examples/segmental-rnn
     """
 
-    def __init__(self, pretrained_embedding_map: Vectors, vocab_dict: FspDict, param: Param, device: str):
+    def __init__(self, param: FrameIdentificationParam, device: str):
         super().__init__()
-        self.pretrained_embedding_map = pretrained_embedding_map
+        # will be set when preparing data see prepare_data().
+        self.pretrained_embedding_map = None
         self.param = param
-        self.vocab_dict = vocab_dict
         self._d = device
         self.batch_size = param.batch_size
 
@@ -215,10 +216,10 @@ class FrameIdentificationRNN(LightningModule):
         return Adam(self.parameters(), lr=0.001)
 
     def prepare_data(self):
-        dev_conll_file_loc = 'data/fn1.7/fn1.7.dev.syntaxnet.conll'
-        e, m, x = read_conll(dev_conll_file_loc)
+        e, m, x = read_conll(self.param.train_data_path)
 
         max_token_length = 0
+        # determine max_token_length in training data, to be used for padding or trimming
         for i in range(len(e)):
             current_sentence_len = len(e[i].sentence.tokens)
             if current_sentence_len > max_token_length:
@@ -260,6 +261,8 @@ class FrameIdentificationRNN(LightningModule):
         lexical_units_field.build_vocab(lexical_units)
         lexical_unit_postags_field.build_vocab(lexical_unit_postags)
         label_field.build_vocab(labels)
+
+        self.pretrained_embedding_map = tokens_field.vocab.vectors
 
         train, val = FrameDataset(
             sentences=sentences,
@@ -338,7 +341,7 @@ class FrameIdentificationRNN(LightningModule):
         )
 
 
-class FrameTargetIdentificationRNNParam(object):
+class FrameTargetIdentificationParam(object):
     def __init__(self, **kwargs):
         self.input_size = kwargs.get('input_size', 0)
         self.token_dim = kwargs.get('token_dim', 100)
@@ -352,15 +355,18 @@ class FrameTargetIdentificationRNNParam(object):
         self.bilstm_layer_size = kwargs.get('bilstm_layer_size', 2)
         self.output_size = kwargs.get('output_size', 0)
         self.batch_size = kwargs.get('batch_size', 1)
+        self.training_file_path = kwargs.get('training_file_path', 'data/fn1.7/fn1.7.dev.syntaxnet.conll')
 
 
 class FrameTargetIdentificationRNN(LightningModule):
-    def __init__(self, pretrained_embedding: Vectors, model_param: FrameTargetIdentificationRNNParam):
+    def __init__(self, model_param: FrameTargetIdentificationParam, device: str):
         super().__init__()
+        self.param = model_param
         self.token_embedding = nn.Embedding(model_param.input_size, model_param.token_dim)
         self.postag_embedding = nn.Embedding(model_param.postag_size, model_param.postag_dim)
         self.lemma_embedding = nn.Embedding(model_param.lemma_size, model_param.lemma_dim)
-        self.pretrained_embedding = pretrained_embedding
+        # will be prepared at prepare_data()
+        self.pretrained_embedding = None
 
         self.lin1 = nn.Linear(
             (model_param.token_dim +
@@ -381,27 +387,22 @@ class FrameTargetIdentificationRNN(LightningModule):
         self.train_iter = None
         self.val_iter = None
         # self._d = 'cpu'
-        self._d = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self._d = device
 
     def forward(self, tokens: torch.Tensor, postags: torch.Tensor, lemmas: torch.Tensor):
         tokens_x = self.token_embedding(tokens)
         postags_x = self.postag_embedding(postags)
         lemmas_x = self.lemma_embedding(lemmas)
-        pretrained_x = torch.zeros(tokens.shape[0], tokens.shape[1], self.pretrained_embedding.dim).to(self._d)
-        for i, batch in enumerate(tokens):
-            for j, token in enumerate(batch):
-                pretrained_x[i][j] = self.pretrained_embedding[token]
-        # pretrained_x = self.pretrained_embedding[tokens].to(self._d)
-        # print(tokens_x.shape)
-        # print(postags_x.shape)
-        # print(lemmas_x.shape)
-        # print(pretrained_x.shape)
+        # pretrained_x = torch.zeros(tokens.shape[0], tokens.shape[1], self.pretrained_embedding.shape[1]).to(self._d)
+        # for i, batch in enumerate(tokens):
+        #     for j, token in enumerate(batch):
+        #         pretrained_x[i][j] = self.pretrained_embedding[token]
+        pretrained_x = self.pretrained_embedding[tokens].to(self._d)
 
         x = torch.cat([tokens_x, postags_x, lemmas_x, pretrained_x], dim=2)
         x = self.lin1(x)
         x = F.relu(x)
         x, _ = self.bilstm(x.permute(1, 0, 2))
-        # x, _ = self.bilstm(x.view(x.shape[0], self.batch_size, x.shape[1]))
         x = F.relu(x.permute(1, 0, 2))
         x = self.lin2(x)
 
@@ -411,8 +412,7 @@ class FrameTargetIdentificationRNN(LightningModule):
         return Adam(self.parameters(), lr=0.001)
 
     def prepare_data(self):
-        dev_conll_file_loc = 'data/fn1.7/fn1.7.dev.syntaxnet.conll'
-        e, m, x = read_conll(dev_conll_file_loc)
+        e, m, x = read_conll(self.param.training_file_path)
 
         max_token_length = 0
         for i in range(len(e)):
@@ -439,6 +439,8 @@ class FrameTargetIdentificationRNN(LightningModule):
         tokens_field.build_vocab(sentences, vectors=FastText('simple'))
         postags_field.build_vocab(sentences_postags)
         lemmas_field.build_vocab(sentences_lemmas, vectors=FastText('simple'))
+
+        self.pretrained_embedding = tokens_field.vocab.vectors
 
         def _preprocess_field(l: list) -> list:
             return [
