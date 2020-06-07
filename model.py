@@ -50,12 +50,35 @@ DEV_EVAL_EPOCH = configuration['dev_eval_epoch_frequency'] * EVAL_EVERY_EPOCH
 PRETRAINED_EMB_DIM = configuration['pretrained_embedding_dim']
 
 
-class CustomDataset(Dataset):
+class FrameTargetDataset(Dataset):
     def __init__(self, sentences: list, s_postags: list, s_lemmas: list, labels: list, fields: list):
-        super(CustomDataset, self).__init__(
+        super(FrameTargetDataset, self).__init__(
             [
                 Example.fromlist([tokens, postags, lemmas, label], fields)
                 for tokens, postags, lemmas, label in zip(sentences, s_postags, s_lemmas, labels)
+            ],
+            fields
+        )
+
+
+class FrameDataset(Dataset):
+    def __init__(self, sentences: list,
+                 s_postags: list,
+                 lexical_units: list,
+                 lexical_unit_postags: list,
+                 target_positions: list,
+                 labels: list,
+                 fields: list):
+        super(FrameDataset, self).__init__(
+            [
+                Example.fromlist(
+                    [tokens, postags, lus, lu_pos, target_pos, label],
+                    fields
+                )
+                for tokens, postags, lus, lu_pos, target_pos, label in zip(
+                sentences, s_postags, lexical_units,
+                lexical_unit_postags, target_positions, labels
+            )
             ],
             fields
         )
@@ -78,6 +101,7 @@ class Param(object):
         self.framedict_size = kwargs.get('framedict_size', 0)
         self.pretrained_dim = kwargs.get('pretrained_dim', PRETRAINED_EMB_DIM)
         self.lstmdepth = kwargs.get('lstmdepth', LSTMDEPTH)
+        self.batch_size = kwargs.get('batch_size', 32)
 
 
 class FrameIdentificationRNN(LightningModule):
@@ -91,6 +115,7 @@ class FrameIdentificationRNN(LightningModule):
         self.param = param
         self.vocab_dict = vocab_dict
         self._d = device
+        self.batch_size = param.batch_size
 
         self.v_x = nn.Embedding(param.vocdict_size, param.tokdim)
         self.p_x = nn.Embedding(param.postdict_size, param.posdim)
@@ -118,6 +143,8 @@ class FrameIdentificationRNN(LightningModule):
 
         self.lin_z = nn.Linear(param.lstmdim + param.ludim + param.lpdim, param.hiddendim)
         self.lin_f = nn.Linear(param.hiddendim, param.framedict_size)
+        self.train_iter = None
+        self.val_iter = None
 
     def forward(self, tokens: torch.Tensor, postags: torch.Tensor, lexical_units: torch.Tensor,
                 lexical_unit_postags: torch.Tensor, targetpositions: list) -> torch.Tensor:
@@ -132,55 +159,184 @@ class FrameIdentificationRNN(LightningModule):
         """
         tokens_x = self.v_x(tokens)
         postags_x = self.p_x(postags)
+        current_batch_size = tokens.shape[0]
 
         x = torch.cat([
             tokens_x,
             postags_x,
-            self._get_token_pretrained_embedding(tokens)
-        ], dim=1)
+            self.pretrained_embedding_map[tokens].to(self._d)
+        ], dim=2)
         x = self.lin_e(x)
         x = F.relu(x)
-        x = x.view(
-            x.size()[0],
-            1,  # batch num, assuming this to be 1
-            x.size()[1]
-        )
+        x = x.permute(1, 0, 2)
         # TODO reproduce dropout
         # if USE_DROPOUT and trainmode:
         #     builders[0].set_dropout(DROPOUT_RATE)
         #     builders[1].set_dropout(DROPOUT_RATE)
 
         x, _ = self.fw_x(x)
+        x = x.permute(1, 0, 2)
         # only take vector in frame position
-        x = x[targetpositions]
-        x, _ = self.tlstm(x)
-        # target_embeddings = self._target_embeddings(x, targetpositions)
-        # target_vec = self._target_vec(target_embeddings)
+        hidden_dim_size = x.shape[2]
+        x = x.reshape(x.shape[0], -1)
+        binary_filter = targetpositions.T.repeat(
+            1,
+            hidden_dim_size
+        ).view(current_batch_size, -1)
+        x = x.mul(binary_filter).view(current_batch_size, -1, hidden_dim_size)
+        x = x.permute(1, 0, 2)
+        x, (h, _) = self.tlstm(x)
 
+        # TODO reproduce using hierarchy parsing?
         # if USE_HIER and lexunit.id in relatedlus:
         #     lu_vec = esum([lu_x[luid] for luid in relatedlus[lexunit.id]])
         # else:
         #     lu_vec = lu_x[lexunit.id]
-        # if len(target_vec.size()) == 1:
-        #     target_vec = target_vec.view(1, -1)
-        x = x.squeeze(1)
-        lexical_unit_embedding = self.lu_x(lexical_units)
-        lexical_unit_postag_embedding = self.lp_x(lexical_unit_postags)
+        x = h[-1].unsqueeze(1)
+        lexical_unit_embedding = self.lu_x(lexical_units).unsqueeze(1)
+        lexical_unit_postag_embedding = self.lp_x(lexical_unit_postags).unsqueeze(1)
         x = torch.cat([
             x,
-            lexical_unit_embedding,
-            lexical_unit_postag_embedding
-        ], dim=1)
-
+            lexical_unit_embedding.repeat(1, x.shape[1], 1),
+            lexical_unit_postag_embedding.repeat(1, x.shape[1], 1)
+        ], dim=2)
         # TODO reproduce this dropout
         # if trainmode and USE_DROPOUT:
         #     f_i = dropout(f_i, DROPOUT_RATE)
+
+        # TODO activation function makes error large and model could not learn
         x = self.lin_z(x)
         # x = F.relu(x)
         x = self.lin_f(x)
         # x = F.relu(x)
         return x
 
+    def configure_optimizers(self):
+        return Adam(self.parameters(), lr=0.001)
+
+    def prepare_data(self):
+        dev_conll_file_loc = 'data/fn1.7/fn1.7.dev.syntaxnet.conll'
+        e, m, x = read_conll(dev_conll_file_loc)
+
+        max_token_length = 0
+        for i in range(len(e)):
+            current_sentence_len = len(e[i].sentence.tokens)
+            if current_sentence_len > max_token_length:
+                max_token_length = current_sentence_len
+
+        # reverse int to tokens
+        sentences = list()
+        sentences_postags = list()
+        lexical_units = list()
+        lexical_unit_postags = list()
+        target_positions = list()
+        labels = list()
+
+        for i in range(int(x)):
+            sentences.append([VOCDICT.getstr(token) for token in e[i].sentence.tokens])
+            sentences_postags.append([POSDICT.getstr(postag) for postag in e[i].sentence.postags])
+
+            target_positions_in_one_sentence = set(e[i].targetframedict.keys())
+            target_positions.append(
+                [1 if x in target_positions_in_one_sentence else 0 for x in range(max_token_length)])
+
+            lexical_unit, frame = list(e[i].targetframedict.values())[0]
+
+            lexical_units.append(LUDICT.getstr(lexical_unit.id))
+            lexical_unit_postags.append(LUPOSDICT.getstr(lexical_unit.posid))
+            labels.append(FRAMEDICT.getstr(frame.id))
+
+        tokens_field = Field(sequential=True, fix_length=max_token_length)
+        postags_field = Field(sequential=True, fix_length=max_token_length)
+        lexical_units_field = Field(sequential=False)
+        lexical_unit_postags_field = Field(sequential=False)
+        target_positions_field = Field(sequential=True, use_vocab=False)
+
+        label_field = Field(sequential=False, is_target=True)
+
+        # TODO use GloVe with 6B tokens and 100D as the paper says
+        tokens_field.build_vocab(sentences, vectors='fasttext.simple.300d')
+        postags_field.build_vocab(sentences_postags)
+        lexical_units_field.build_vocab(lexical_units)
+        lexical_unit_postags_field.build_vocab(lexical_unit_postags)
+        label_field.build_vocab(labels)
+
+        train, val = FrameDataset(
+            sentences=sentences,
+            s_postags=sentences_postags,
+            lexical_units=lexical_units,
+            lexical_unit_postags=lexical_unit_postags,
+            target_positions=target_positions,
+            labels=labels,
+            fields=[
+                ('tokens', tokens_field),
+                ('postags', postags_field),
+                ('lexical_units', lexical_units_field),
+                ('lexical_unit_postags', lexical_unit_postags_field),
+                ('target_positions', target_positions_field),
+                ('label', label_field)
+            ]
+        ).split()
+
+        self.train_iter, self.val_iter = BucketIterator.splits(
+            datasets=(train, val),
+            batch_sizes=(self.batch_size, self.batch_size),
+            device=self._d,
+            sort=False
+        )
+
+    def train_dataloader(self):
+        return self.train_iter
+
+    def training_step(self, batch, batch_idx):
+        x, y = (
+                   batch.tokens.T,
+                   batch.postags.T,
+                   batch.lexical_units,
+                   batch.lexical_unit_postags,
+                   batch.target_positions,
+               ), batch.label.T
+        y_hat = self(*x).squeeze(1)
+        top_y, top_y_index = y_hat.topk(1, dim=1)
+        loss = F.cross_entropy(y_hat, y)
+        accuracy = (
+                (top_y_index.squeeze() == batch.label).sum() /
+                float(batch.label.shape[0])
+        )
+        return dict(
+            loss=loss,
+            log=dict(
+                train_loss=loss,
+                train_accuracy=accuracy
+            )
+        )
+
+    def val_dataloader(self):
+        return self.val_iter
+
+    def validation_step(self, batch, batch_idx):
+        x, y = (
+                   batch.tokens.T,
+                   batch.postags.T,
+                   batch.lexical_units,
+                   batch.lexical_unit_postags,
+                   batch.target_positions,
+               ), batch.label.T
+        y_hat = self(*x).squeeze(1)
+        top_y, top_y_index = y_hat.topk(1, dim=1)
+        loss = F.cross_entropy(y_hat, y)
+        accuracy = (
+                (top_y_index.squeeze() == batch.label).sum() /
+                float(batch.label.shape[0])
+        )
+        return dict(
+            loss=loss,
+            log=dict(
+                val_loss=loss,
+                val_accuracy=accuracy
+            )
+        )
+    
     def forward_as_df(self, tokens: torch.Tensor, postags: torch.Tensor, lexical_units: torch.Tensor,
                       lexical_unit_postags: torch.Tensor, targetpositions: list):
         import pandas as pd
@@ -435,7 +591,7 @@ class FrameTargetIdentificationRNN(LightningModule):
             is_target=True
         )
 
-        train, val = CustomDataset(
+        train, val = FrameTargetDataset(
             sentences,
             sentences_postags,
             sentences_lemmas,
